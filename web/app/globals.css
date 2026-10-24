@@ -68,6 +68,15 @@ body {
 .down {
   color: var(--down);
 }
+.rvol-2 {
+  color: var(--amber);
+}
+.rvol-3 {
+  color: color-mix(in srgb, var(--amber) 50%, var(--up));
+}
+.rvol-5 {
+  color: var(--up);
+}
 .amber {
   color: var(--amber);
 }

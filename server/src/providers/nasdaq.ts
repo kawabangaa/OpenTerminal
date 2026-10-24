@@ -151,6 +151,19 @@ export async function history(symbol: string, rangeKey: string): Promise<Candle[
   return candles;
 }
 
+/** Trading-day count on Nasdaq's historical table, ending on `toYmd` (YYYY-MM-DD). */
+export async function barCount(symbol: string, limit: number, toYmd: string): Promise<number> {
+  const [y, m, d] = toYmd.split("-").map(Number);
+  // Calendar subtraction in UTC so a DST boundary cannot shift the YYYY-MM-DD.
+  const from = fmtDate(new Date(Date.UTC(y, m - 1, d - 120)));
+  const data = await nfetch(
+    `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${from}&todate=${toYmd}&limit=${limit}`
+  );
+  const rows = data.tradesTable?.rows;
+  if (!rows) return 0;
+  return rows.length;
+}
+
 export type NasdaqOptionRow = {
   strike: number | null;
   lastPrice: number | null;

@@ -3,9 +3,11 @@ import cors from "cors";
 import { marketRouter } from "./routes/market.js";
 import { portfolioRouter } from "./routes/portfolio.js";
 import { aiRouter } from "./routes/ai.js";
+import { unusualVolumeRouter } from "./routes/unusualVolume.js";
 import { allStats } from "./providers/registry.js";
 import { requireApiKey } from "./auth.js";
 import { rateLimit } from "./rateLimit.js";
+import { startScheduler } from "./unusualVolume/scheduler.js";
 
 const app = express();
 
@@ -28,6 +30,9 @@ if (process.env.TRUST_PROXY === "1") {
 const webOrigin = process.env.WEB_ORIGIN ?? "http://localhost:3000";
 app.use(cors({ origin: webOrigin }));
 app.use(express.json());
+
+// Registered before the /api market mount so this prefix is not swallowed by it.
+app.use("/api/unusual-volume", rateLimit({ windowMs: 60_000, max: 240 }), unusualVolumeRouter);
 
 // No API key here by design (market.ts routes proxy free, keyless public data),
 // but still bounded per-IP: unlike /api/ai and /api/portfolios, an unauthenticated
@@ -60,4 +65,5 @@ const PORT = Number(process.env.API_PORT ?? 4000);
 const HOST = process.env.API_HOST ?? "127.0.0.1";
 app.listen(PORT, HOST, () => {
   console.log(`OpenTerminal API listening on http://${HOST}:${PORT}`);
+  startScheduler();
 });
