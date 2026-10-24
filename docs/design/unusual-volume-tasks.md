@@ -29,7 +29,7 @@ Rules:
 2. Push with `git push -u origin <branch>`. A plain `git push` from a tracking branch also goes to the fork.
 3. Open PRs against the fork explicitly, so the tooling cannot pick the parent repo:
    `gh pr create --repo kawabangaa/OpenTerminal --base main --head <branch> …`
-4. Never run `git push upstream …` or `gh pr create` without `--repo`. There is no write access to upstream anyway, but a mistaken attempt still leaks the branch name and wastes time.
+4. Never run `git push upstream …` or `gh pr create` without `--repo`. The clone's `upstream` push URL is set to `no_push` (`git remote set-url --push upstream no_push`), so a push there fails with `'no_push' does not appear to be a git repository`. That error is intentional; do not "fix" it by restoring the URL. A fresh clone must apply the same setting.
 5. Syncing from the original project (maintainer does this on `main`): `git fetch upstream && git merge upstream/main && git push origin main`.
 6. Commits are local until pushed; an agent committing in this clone has written nothing to GitHub. Only `git push` publishes, and it publishes to the fork.
 
