@@ -5,6 +5,8 @@
 | **Status** | Draft for review |
 | **Last updated** | 2026-10-25 |
 | **Requirements** | [`docs/requirements/unusual-volume-widget.md`](../requirements/unusual-volume-widget.md) |
+| **Tasks** | [`docs/design/unusual-volume-tasks.md`](unusual-volume-tasks.md) |
+| **Repo** | Fork **`kawabangaa/OpenTerminal`** (`origin`). `upstream` = `ErTasselli/openterminal` is fetch-only; never push or open PRs there. Full rules in the tasks doc, "Repository & git workflow". |
 
 Requirement IDs (FR-n, NFR-n, A-n) below refer to that document.
 

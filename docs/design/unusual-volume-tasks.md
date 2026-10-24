@@ -13,6 +13,26 @@
 - Every task's **Tests** section is part of its scope. A task is not done until its tests exist, pass locally and in CI, and the acceptance IDs it names are covered.
 - Interfaces between tasks are fixed by the design doc §4 types. If you must change a signature, update the design doc in the same PR and tell the owners of dependent tasks.
 
+## Repository & git workflow (read before your first commit)
+
+This work happens in the **fork `kawabangaa/OpenTerminal`**, never in the
+upstream repo `ErTasselli/openterminal`. The local clone is wired so that the
+default path is the safe one; do not change it.
+
+| Remote | URL | Use |
+|--------|-----|-----|
+| `origin` | `git@github.com:kawabangaa/OpenTerminal.git` | **All pushes and PRs.** `main` tracks `origin/main`. |
+| `upstream` | `https://github.com/ErTasselli/openterminal.git` | **Fetch only**, to pull the original project's updates. Never push here, never open PRs here. |
+
+Rules:
+1. Branch from `main` with a task-scoped name: `feat/uv-t08-compute`, `test/uv-t18-system`, `docs/uv-...`.
+2. Push with `git push -u origin <branch>`. A plain `git push` from a tracking branch also goes to the fork.
+3. Open PRs against the fork explicitly, so the tooling cannot pick the parent repo:
+   `gh pr create --repo kawabangaa/OpenTerminal --base main --head <branch> …`
+4. Never run `git push upstream …` or `gh pr create` without `--repo`. There is no write access to upstream anyway, but a mistaken attempt still leaks the branch name and wastes time.
+5. Syncing from the original project (maintainer does this on `main`): `git fetch upstream && git merge upstream/main && git push origin main`.
+6. Commits are local until pushed; an agent committing in this clone has written nothing to GitHub. Only `git push` publishes, and it publishes to the fork.
+
 ## Repository test standard (applies to every task)
 
 Copied from how the repo already works. Reviewers will check each item.
