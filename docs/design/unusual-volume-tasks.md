@@ -363,7 +363,7 @@ Copied from how the repo already works. Reviewers will check each item.
 
 **Scope**
 - `server/src/unusualVolume/system.test.ts`: one test file that stubs **only `fetch`** (not the modules) with a URL-dispatching mock covering TradingView scan + SPY, EDGAR `company_tickers.json` + one `submissions` JSON + one Form 4 XML, Google RSS (one 429 to exercise the Yahoo fallback), Yahoo RSS, Nasdaq `historical` and `earnings-surprise`. Uses a temp `DATA_DIR`. Fixed `now = 2026-10-24T03:00:00Z` (06:00 Jerusalem, Friday 23:00 ET).
-- Asserts, end to end: the saved run for `2026-10-23`; the matched symbols and their RVOL to 2 dp; tags per symbol (one EARN+beat, one M&A filing, one INSIDER_BUY, one with `after close` demotion, one "No catalyst found"); `sources.news === "yahoo"` for the 429 symbol; the `GET` handler's response shape and default sort; the summary log line's request counts equal the number of mock calls per host.
+- Asserts, end to end: the saved run for `2026-10-23`; the matched symbols and their RVOL to 2 dp; tags per symbol (one EARN+beat, one M&A filing, one INSIDER_BUY, one with `after close` demotion, one "No catalyst found"); `sources.news === "fallback"` for the 429 symbol (Yahoo succeeded; see design §17); the `GET` handler's response shape and default sort; the summary log line's request counts equal the number of mock calls per host.
 - This is the repo's first cross-module test; keep fixtures minimal (≤ 6 symbols) and comment the fixture map at the top of the file.
 
 **Tests** — the file is the deliverable. Must run in < 5 s.

@@ -174,7 +174,7 @@ export type Catalysts = {
   tags: Tag[];                        // sorted strongest first
   evidence: Evidence[];               // newest first, headlines capped at 5
   explain: string[];                  // 1–4 rendered lines (§4.7 of the requirements)
-  sources: Partial<Record<"edgar"|"news"|"earnings", "ok"|"failed"|"skipped">>;
+  sources: Partial<Record<"edgar"|"news"|"earnings", "ok"|"fallback"|"failed"|"skipped">>;
 };
 
 export type UnusualVolumeRow = ScanRow & Metrics & {
@@ -185,7 +185,7 @@ export type UnusualVolumeRow = ScanRow & Metrics & {
 
 export type RunSummary = {
   sessionDate: string; earlyClose: boolean; spyChangePct: number | null;
-  counts: { universe: number; liquid: number; rvol: number; green: number; seasoned: number; matches: number };
+  counts: { universe: number; liquid: number; mcap: number; rvol: number; green: number; seasoned: number; matches: number };
   requests: Record<string, number>; failures: Record<string, number>;
   durationMs: number;
 };
@@ -270,7 +270,7 @@ export type Filing = {
 };
 ```
 - `filings.recent` is already newest-first; stop scanning at the first entry older than `sinceIso`.
-- No CIK → `[]` with `sources.edgar = "skipped"`.
+- No CIK → `null` (no submissions request). The caller sets `sources.edgar = "skipped"`. An empty window with a known CIK returns `[]` and `sources.edgar = "ok"`.
 - `form4Transactions(cik, filing)` is the existing `parseForm4` made public. It is called only for Form 4 filings in the window, through the existing `SEC_FETCH_CONCURRENCY`.
 
 ### 6.3 `news.companyNews(name, symbol)`
@@ -467,4 +467,18 @@ Recorded here and mirrored back into the requirements:
 
 1. **FR-19 guard** widened from 04:00–16:00 ET to **04:00–20:00 ET** (§5 step 2).
 2. **Route placement:** a separate `routes/unusualVolume.ts` instead of adding to `marketRouter`; same mount prefix, limiter and error shape.
-3. **AI cache** lives in the client (React Query, per session) rather than SQLite; it still never re-asks for the same (D, symbol) within a session and costs nothing server-side.
+3. **AI cache** lives in the client (React Query, per session) rather than SQLite; it still never re-asks for the same (D, symbol) within a session and costs nothing server-side. `store.ts` does not create an AI-cache table.
+
+## 17. Implementation rulings
+
+These override any conflicting sentence above or in the task list.
+
+1. `unusualVolumeScan` returns `{ rows, dropped }`. `dropped` counts rows missing `open`, `high`, `low`, `close`, `change`, `volume`, or `avg30`. A response whose `data.length === range` throws `Error("tradingview scan: universe truncated")` and nothing is saved.
+2. `RunSummary.counts.liquid` is survivors after the ADV30 filter. `counts.mcap` is survivors after the market-cap filter. The price filter still runs between them and is not its own log field. `seasoned` and `matches` are filled by the run, after the Nasdaq check.
+3. `reenrichOnly` does not scan and does not apply the market-hours guard. It re-runs phase 2 for the current D even when that run is already `complete`.
+4. The market-hours guard is NY time in `[04:00, 20:00)`. `20:00` is inside the scan window.
+5. `Catalysts.sources` values are `"ok" | "fallback" | "failed" | "skipped"`. Google News with at least one relevant headline is `"ok"`; Yahoo fallback is `"fallback"`; both failed is `"failed"`.
+6. Earnings line 1 labels the quarter from the NY month of the release: Oct–Dec Q3, Jan–Mar Q4, Apr–Jun Q1, Jul–Sep Q2.
+7. OPEX’s holiday shift is a pure helper that takes the holiday set. No 2026–2027 third Friday is Good Friday, so the shift test injects a holiday rather than expecting one in `HOLIDAYS`.
+8. Russell flag dates, the session whose volume would reflect the event (FTSE Russell): `2026-06-26`, `2026-12-11`. `2027-06-25` is the fourth Friday of June. December 2027 is not published; leave it unset and say so in the source comment.
+9. TradingView's `name` column is the ticker and `description` is the company name. `ScanRow.name` is `description` (fallback: the symbol). The request still asks for both columns, in the documented order. `ScanRow.symbol` comes from `s` after the colon.
