@@ -234,6 +234,47 @@ describe("unusual volume store", () => {
     expect(row.checked_at).toBe("2026-10-24T01:00:00.000Z");
   });
 
+  it("getRowsBetween returns only the inclusive range, newest session first", () => {
+    const catalysts: Catalysts = {
+      tags: [{ id: "NEWS", strength: "medium" }],
+      evidence: [],
+      explain: ["range"],
+      sources: { news: "ok" },
+    };
+    store.saveListPhase(listRun("2026-10-26"), [fixtureRow("OLD", 5), fixtureRow("OLD2", 2)]);
+    store.saveEnrichmentPhase("2026-10-26", new Map([["OLD", catalysts]]), fixtureSummary("2026-10-26"), "2026-10-27T03:00:00.000Z");
+    store.saveListPhase(listRun("2026-10-27"), [fixtureRow("MIDLO", 2.5), fixtureRow("MIDHI", 4)]);
+    store.saveEnrichmentPhase("2026-10-27", new Map([["MIDHI", catalysts]]), fixtureSummary("2026-10-27"), "2026-10-28T03:00:00.000Z");
+    store.saveListPhase(listRun("2026-10-29"), [fixtureRow("NEWLO", 3), fixtureRow("NEWHI", 6)]);
+    store.saveEnrichmentPhase("2026-10-29", new Map([["NEWHI", catalysts]]), fixtureSummary("2026-10-29"), "2026-10-30T03:00:00.000Z");
+
+    const rows = store.getRowsBetween("2026-10-27", "2026-10-29");
+    expect(rows.map((row) => `${row.sessionDate}:${row.symbol}`)).toEqual([
+      "2026-10-29:NEWHI",
+      "2026-10-29:NEWLO",
+      "2026-10-27:MIDHI",
+      "2026-10-27:MIDLO",
+    ]);
+    expect(rows[0].sessionDate).toBe("2026-10-29");
+    expect(rows[0].catalysts).toEqual(catalysts);
+    expect(rows[1].catalysts).toBeNull();
+  });
+
+  it("listRuns is inclusive and empty when nothing was saved", () => {
+    expect(store.listRuns("2027-01-04", "2027-01-08")).toEqual([]);
+    store.saveListPhase(listRun("2027-01-05"), [fixtureRow("A", 3)]);
+    store.saveListPhase(listRun("2027-01-08"), [fixtureRow("B", 3)]);
+    expect(store.listRuns("2027-01-05", "2027-01-08").map((run) => run.sessionDate)).toEqual(["2027-01-08", "2027-01-05"]);
+  });
+
+  it("a phase-1 run in the range keeps null catalysts", () => {
+    store.saveListPhase(listRun("2027-02-02"), [fixtureRow("P1", 3.2)]);
+    const rows = store.getRowsBetween("2027-02-02", "2027-02-02");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].catalysts).toBeNull();
+    expect(rows[0].sessionDate).toBe("2027-02-02");
+  });
+
   it("upserts the refresh timestamp", () => {
     expect(store.getLastRefresh("2026-10-20")).toBeUndefined();
     store.setLastRefresh("2026-10-20", "2026-10-24T03:00:00.000Z");

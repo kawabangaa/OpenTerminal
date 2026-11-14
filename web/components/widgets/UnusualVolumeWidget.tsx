@@ -11,6 +11,7 @@ import {
   type Catalysts,
   type Evidence,
   type Strength,
+  type SessionMeta,
   type UnusualVolumeResponse,
   type UnusualVolumeRow,
 } from "../../lib/api";
@@ -26,6 +27,7 @@ const FIRST_RUN_MESSAGE =
 const AI_TIMEOUT_MS = 15_000;
 const REFRESH_COOLDOWN_SEC = 10 * 60;
 const THRESHOLDS = [2.5, 3, 5] as const;
+const SPANS = [1, 2, 3, 5] as const;
 
 export type ColumnKey =
   | "symbol"
@@ -109,6 +111,46 @@ function commitNumber(raw: string, min: number): number {
   return n;
 }
 
+function commitSpan(raw: string): number {
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > 10) return 10;
+  return n;
+}
+
+function dropYear(label: string): string {
+  return label.replace(/ \d{4}$/, "");
+}
+
+/** Date span shown in the header: one session label, or "Mon 26 Oct – Thu 29 Oct 2026". */
+export function rangeLabel(sessions: SessionMeta[]): string {
+  if (sessions.length === 0) return "";
+  if (sessions.length === 1) return sessions[0].sessionLabel;
+  return `${dropYear(sessions[sessions.length - 1].sessionLabel)} – ${sessions[0].sessionLabel}`;
+}
+
+/** Rows for each session, in `sessions` order. Sessions with no rows map to an empty list. */
+export function rowsBySession(rows: UnusualVolumeRow[], sessions: SessionMeta[]): Map<string, UnusualVolumeRow[]> {
+  const grouped = new Map<string, UnusualVolumeRow[]>();
+  for (const session of sessions) grouped.set(session.sessionDate, []);
+  for (const row of rows) {
+    const bucket = grouped.get(row.sessionDate);
+    if (bucket) bucket.push(row);
+  }
+  return grouped;
+}
+
+function anchorOptionLabel(session: SessionMeta): string {
+  const short = dropYear(session.sessionLabel);
+  if (session.status === "missing") return `${short} · no run`;
+  if (session.status === "pending") return `${short} · pending`;
+  return short;
+}
+
+function missingSentence(session: SessionMeta): string {
+  return `No run saved for ${session.sessionLabel} (server was off between 20:00 and 04:00 ET)`;
+}
+
 function clock(iso: string, timeZone: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
@@ -179,6 +221,9 @@ export default function UnusualVolumeWidget() {
   const [marketCapMinB, setMarketCapMinB] = useState(0.3);
   const [marketCapDraft, setMarketCapDraft] = useState("0.3");
   const [sector, setSector] = useState("");
+  const [anchor, setAnchor] = useState("");
+  const [span, setSpan] = useState(1);
+  const [spanDraft, setSpanDraft] = useState("1");
   const [sort, setSort] = useState<ColumnKey>("rvol");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -211,10 +256,19 @@ export default function UnusualVolumeWidget() {
   });
   const aiAvailable = status?.ai === true;
 
+  const { data: sessionList } = useQuery({
+    queryKey: ["unusual-volume", "sessions"],
+    queryFn: () => apiGet<{ sessions: SessionMeta[] }>("/api/unusual-volume/sessions?limit=20"),
+    staleTime: 5 * 60_000,
+    refetchInterval: 15 * 60_000,
+  });
+
   const { data, isLoading, error, dataUpdatedAt } = useQuery({
-    queryKey: ["unusual-volume", threshold, marketCapMinB, sector, sort, dir],
+    queryKey: ["unusual-volume", anchor, span, threshold, marketCapMinB, sector, sort, dir],
     queryFn: () => {
       const params = new URLSearchParams();
+      params.set("span", String(span));
+      if (anchor) params.set("to", anchor);
       params.set("threshold", String(threshold));
       params.set("marketCapMin", String(Math.round(marketCapMinB * 1e9)));
       if (sector) params.set("sector", sector);
@@ -223,16 +277,21 @@ export default function UnusualVolumeWidget() {
       return apiGet<UnusualVolumeResponse>(`/api/unusual-volume?${params}`);
     },
     refetchInterval: (query) =>
-      pollFast || query.state.data?.enrichmentStatus === "pending" ? 10_000 : 15 * 60_000,
+      pollFast || query.state.data?.sessions.some((session) => session.status === "pending") ? 10_000 : 15 * 60_000,
   });
 
   useEffect(() => {
     if (!pollFast) return;
     if (dataUpdatedAt <= seenAt.current) return;
-    if (data?.enrichmentStatus === "complete") setPollFast(false);
-  }, [pollFast, dataUpdatedAt, data?.enrichmentStatus]);
+    if (data && !data.sessions.some((session) => session.status === "pending")) setPollFast(false);
+  }, [pollFast, dataUpdatedAt, data]);
 
   const columns = visibleColumns(widthPx);
+  const grouped = data ? rowsBySession(data.rows, data.sessions) : new Map<string, UnusualVolumeRow[]>();
+  const missingCount = data?.sessions.filter((session) => session.status === "missing").length ?? 0;
+  const allMissing = data != null && data.sessions.length > 0 && missingCount === data.sessions.length;
+  const refreshApplies = data?.latestSession != null && data.sessions.some((session) => session.sessionDate === data.latestSession);
+  const single = data?.sessions.length === 1 ? data.sessions[0] : undefined;
 
   const commitThreshold = () => {
     const next = commitNumber(thresholdDraft, 2.5);
@@ -244,6 +303,12 @@ export default function UnusualVolumeWidget() {
     const next = commitNumber(marketCapDraft, 0.3);
     setMarketCapMinB(next);
     setMarketCapDraft(String(next));
+  };
+
+  const commitSpanDraft = () => {
+    const next = commitSpan(spanDraft);
+    setSpan(next);
+    setSpanDraft(String(next));
   };
 
   const refresh = async () => {
@@ -271,6 +336,43 @@ export default function UnusualVolumeWidget() {
   return (
     <div ref={rootRef} className="min-w-0">
       <div className="flex gap-2 p-1 flex-wrap items-center">
+        <select value={anchor} onChange={(e) => setAnchor(e.target.value)} aria-label="Anchor session">
+          <option value="">Latest</option>
+          {(sessionList?.sessions ?? []).map((session) => (
+            <option key={session.sessionDate} value={session.sessionDate}>
+              {anchorOptionLabel(session)}
+            </option>
+          ))}
+        </select>
+        <div className="flex gap-1">
+          {SPANS.map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={`term-btn ${span === value ? "active" : ""}`}
+              onClick={() => {
+                setSpan(value);
+                setSpanDraft(String(value));
+              }}
+            >
+              {value}D
+            </button>
+          ))}
+        </div>
+        <input
+          className="w-14"
+          type="number"
+          min={1}
+          max={10}
+          step={1}
+          aria-label="Session span"
+          value={spanDraft}
+          onChange={(e) => setSpanDraft(e.target.value)}
+          onBlur={commitSpanDraft}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+        />
         <div className="flex gap-1">
           {THRESHOLDS.map((value) => (
             <button
@@ -321,7 +423,13 @@ export default function UnusualVolumeWidget() {
             <option key={name} value={name}>{name}</option>
           ))}
         </select>
-        <button type="button" className="term-btn" onClick={() => void refresh()} disabled={refreshing}>
+        <button
+          type="button"
+          className="term-btn"
+          onClick={() => void refresh()}
+          disabled={refreshing || (data != null && !refreshApplies)}
+          title={data != null && !refreshApplies ? "Refresh applies to the latest session only" : undefined}
+        >
           Refresh
         </button>
         {refreshNote && <span className="dim">{refreshNote}</span>}
@@ -334,25 +442,37 @@ export default function UnusualVolumeWidget() {
         >
           AI
         </button>
-        {data && (
+        {data && single && (
           <span className="dim ml-auto">
-            Session: {data.sessionLabel}
-            {data.earlyClose && (
+            Session: {single.sessionLabel}
+            {single.earlyClose && (
               <span className="ml-1 border border-[var(--amber-dim)] text-[var(--amber)] px-1">early close</span>
             )}
             {" · "}
-            {data.totalMatches} matches · run {clock(data.runAt, "Asia/Jerusalem")}
+            {single.matches} matches
+            {single.runAt ? ` · run ${clock(single.runAt, "Asia/Jerusalem")}` : ""}
+          </span>
+        )}
+        {data && !single && (
+          <span className="dim ml-auto">
+            Sessions: {rangeLabel(data.sessions)} ({data.sessions.length}) · {data.totalMatches} matches
+            {missingCount > 0 && <span className="amber"> · {missingCount} missing</span>}
           </span>
         )}
       </div>
       {isLoading && !data && <div className="p-2 dim">Loading…</div>}
       {error && <div className="p-2 down">{loadErrorText(error)}</div>}
-      {data && data.rows.length === 0 && !error && (
+      {data && allMissing && !error && (
         <div className="p-2 dim">
-          No unusual volume for {data.sessionLabel} at ≥ {threshold}×
+          No run saved for {data.from}–{data.to}. Runs happen at 06:00 or on the next startup before 04:00 ET.
         </div>
       )}
-      {data && data.rows.length > 0 && (
+      {data && !allMissing && data.rows.length === 0 && !error && (
+        <div className="p-2 dim">
+          No unusual volume for {rangeLabel(data.sessions)} at ≥ {threshold}×
+        </div>
+      )}
+      {data && !allMissing && (data.rows.length > 0 || span > 1) && (
         <table className="data-table">
           <thead>
             <tr>
@@ -371,42 +491,72 @@ export default function UnusualVolumeWidget() {
             </tr>
           </thead>
           <tbody>
-            {data.rows.map((row) => (
-              <Fragment key={row.symbol}>
-                <tr
-                  onClick={() => {
-                    const sym = normalizeSymbol(row.symbol);
-                    if (sym) setActiveSymbol(sym);
-                  }}
-                >
-                  {columns.map((key) => (
-                    <Cell
-                      key={key}
-                      column={key}
-                      row={row}
-                      expanded={expanded === row.symbol}
-                      onToggle={() => setExpanded(expanded === row.symbol ? null : row.symbol)}
-                    />
-                  ))}
-                </tr>
-                {expanded === row.symbol && (
-                  <tr>
-                    <td colSpan={columns.length} className="!text-left !whitespace-normal">
-                      {row.catalysts === null ? (
-                        <div className="dim px-2 py-1">…</div>
-                      ) : (
-                        <ExpandedDetail
-                          row={row}
-                          sessionDate={data.sessionDate}
-                          useAi={useAi}
-                          aiAvailable={aiAvailable}
-                        />
+            {data.sessions.map((session) => {
+              const sessionRows = grouped.get(session.sessionDate) ?? [];
+              const rowKey = (symbol: string) => `${session.sessionDate}:${symbol}`;
+              return (
+                <Fragment key={session.sessionDate}>
+                  {span > 1 && (
+                    <tr>
+                      <td colSpan={columns.length} className="uv-session">
+                        {session.status === "missing" ? (
+                          missingSentence(session)
+                        ) : (
+                          <>
+                            {session.sessionLabel} · {session.matches} matches
+                            {session.spyChangePct != null && ` · SPY ${session.spyChangePct > 0 ? "+" : ""}${fmt(session.spyChangePct, 1)}%`}
+                            {session.runAt && ` · run ${clock(session.runAt, "Asia/Jerusalem")}`}
+                            {session.earlyClose && (
+                              <span className="ml-1 border border-[var(--amber-dim)] text-[var(--amber)] px-1">early close</span>
+                            )}
+                            {session.status === "pending" && (
+                              <span className="ml-1 border border-[var(--amber-dim)] text-[var(--amber)] px-1">pending</span>
+                            )}
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                  {sessionRows.map((row) => (
+                    <Fragment key={rowKey(row.symbol)}>
+                      <tr
+                        onClick={() => {
+                          const sym = normalizeSymbol(row.symbol);
+                          if (sym) setActiveSymbol(sym);
+                        }}
+                      >
+                        {columns.map((key) => (
+                          <Cell
+                            key={key}
+                            column={key}
+                            row={row}
+                            sessionCount={data.sessions.length}
+                            expanded={expanded === rowKey(row.symbol)}
+                            onToggle={() => setExpanded(expanded === rowKey(row.symbol) ? null : rowKey(row.symbol))}
+                          />
+                        ))}
+                      </tr>
+                      {expanded === rowKey(row.symbol) && (
+                        <tr>
+                          <td colSpan={columns.length} className="!text-left !whitespace-normal">
+                            {row.catalysts === null ? (
+                              <div className="dim px-2 py-1">…</div>
+                            ) : (
+                              <ExpandedDetail
+                                row={row}
+                                sessionDate={row.sessionDate}
+                                useAi={useAi}
+                                aiAvailable={aiAvailable}
+                              />
+                            )}
+                          </td>
+                        </tr>
                       )}
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            ))}
+                    </Fragment>
+                  ))}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       )}
@@ -417,11 +567,13 @@ export default function UnusualVolumeWidget() {
 function Cell({
   column,
   row,
+  sessionCount,
   expanded,
   onToggle,
 }: {
   column: ColumnKey;
   row: UnusualVolumeRow;
+  sessionCount: number;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -442,6 +594,11 @@ function Cell({
             {expanded ? "▼" : "▶"}
           </button>
           {row.symbol}
+          {row.repeats >= 2 && (
+            <span className="dim ml-1" title={`On the list ${row.repeats} of ${sessionCount} sessions`}>
+              ×{row.repeats}
+            </span>
+          )}
         </td>
       );
     case "close":

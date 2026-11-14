@@ -13,6 +13,7 @@ import * as news from "../providers/news.js";
 import * as econcalendar from "../providers/econcalendar.js";
 import * as finra from "../providers/finra.js";
 import * as secedgar from "../providers/secedgar.js";
+import { srLevels } from "../sr/levels.js";
 
 export const marketRouter = Router();
 
@@ -227,23 +228,40 @@ marketRouter.get("/quotes", async (req, res) => {
 
 // ---- history / candles ----
 
+/** Daily (or range-specific) candles. Same cache key the chart's /history route uses. */
+export async function fetchHistory(symbol: string, rangeKey: string): Promise<yahoo.Candle[]> {
+  const data = await cached(`history:${symbol}:${rangeKey}`, HISTORY_TTL, () =>
+    binance.CRYPTO_SYMBOLS.has(symbol)
+      ? binance.history(symbol, rangeKey)
+      : isVix(symbol)
+      ? vixHistory(rangeKey)
+      : withFallback([
+          ["nasdaq", () => nasdaq.history(symbol, rangeKey)],
+          ["yahoo", () => yahoo.history(symbol, yahooRange(rangeKey).range, yahooRange(rangeKey).interval)],
+          ["stooq", () => stooq.history(symbol)],
+        ])
+  );
+  if (!Array.isArray(data) || data.length === 0) throw new Error("empty history from all providers");
+  return data;
+}
+
 marketRouter.get("/history/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const rangeKey = String(req.query.range ?? "6M");
   try {
-    const data = await cached(`history:${symbol}:${rangeKey}`, HISTORY_TTL, () =>
-      binance.CRYPTO_SYMBOLS.has(symbol)
-        ? binance.history(symbol, rangeKey)
-        : isVix(symbol)
-        ? vixHistory(rangeKey)
-        : withFallback([
-            ["nasdaq", () => nasdaq.history(symbol, rangeKey)],
-            ["yahoo", () => yahoo.history(symbol, yahooRange(rangeKey).range, yahooRange(rangeKey).interval)],
-            ["stooq", () => stooq.history(symbol)],
-          ])
-    );
-    if (!Array.isArray(data) || data.length === 0) throw new Error("empty history from all providers");
-    res.json(data);
+    res.json(await fetchHistory(symbol, rangeKey));
+  } catch (err) {
+    fail(req, res, err);
+  }
+});
+
+const SR_TTL = 60_000;
+
+marketRouter.get("/sr-levels/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const result = await cached(`sr:${symbol}`, SR_TTL, async () => srLevels(symbol, await fetchHistory(symbol, "1Y")));
+    res.json(result);
   } catch (err) {
     fail(req, res, err);
   }

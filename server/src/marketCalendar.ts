@@ -79,6 +79,21 @@ export function isTradingDay(ymd: string): boolean {
   return !listed(HOLIDAYS, ymd);
 }
 
+/** `n` trading days ending at `to` inclusive, newest first. `to` must be a trading day. */
+export function tradingDaysEndingAt(to: string, n: number): string[] {
+  if (!Number.isInteger(n) || n < 1 || n > 60) {
+    throw new RangeError("n must be between 1 and 60");
+  }
+  if (!isTradingDay(to)) throw new Error(`not a trading day: ${to}`);
+  const dates = [to];
+  let cursor = to;
+  for (let i = 1; i < n; i++) {
+    cursor = previousTradingDay(cursor);
+    dates.push(cursor);
+  }
+  return dates;
+}
+
 export function previousTradingDay(ymd: string): string {
   // A holiday glued to a weekend is at most four calendar days. The bound
   // turns a missing year or a bad date into an error instead of a spin.

@@ -77,6 +77,11 @@ body {
 .rvol-5 {
   color: var(--up);
 }
+.uv-session {
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+  text-align: left;
+}
 .amber {
   color: var(--amber);
 }

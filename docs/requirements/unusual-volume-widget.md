@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Approved for v1 |
-| **Last updated** | 2026-10-25 |
+| **Last updated** | 2026-10-30 |
 | **Repo** | Developed in the owner's fork; no upstream issue |
 | **Design** | [`docs/design/unusual-volume-widget.md`](../design/unusual-volume-widget.md) |
 
@@ -64,6 +64,7 @@ verifiable evidence.
 - **FR-12** Clicking a row sets the active symbol (`setActiveSymbol`). A chevron expands the row to show the evidence panel and the Explain output.
 - **FR-13** Empty, loading and error states follow the existing widgets. The widget renders inside `WidgetErrorBoundary`, as every widget does through `Workspace`.
 - **FR-13b** The list and the catalysts are saved as two phases. If the list exists but enrichment hasn't finished (typical for a catch-up run), the rows render and the Catalyst column shows `…` until the enrichment lands.
+- Session range (looking back at one saved session, or across up to 10): **FR-22…FR-29** in [`docs/design/unusual-volume-range.md`](../design/unusual-volume-range.md).
 
 ### 3.3 Integration
 - **FR-14** Registration, matching how existing widgets are wired:
@@ -395,6 +396,15 @@ universe and FINRA short volume in SQLite. This feeds the v1.1 facts. It is
 | Post-close evidence | Headlines keep full weight; filings/earnings after 16:00 ET on D are Context, labeled `after close` |
 | Time zone | Run time in `UNUSUAL_VOLUME_TZ` (default `Asia/Jerusalem`); market logic in `America/New_York` |
 | Retention | 90 days of runs |
+| Range parameters | `to` + `span` (trading days), not `from`/`to`; mirrors the UI, keeps calendar math on the server |
+| Gaps | Shown as `missing` sessions; never substituted with the nearest run; no backfill |
+| Span cap | 10 sessions, server-enforced |
+| Ordering | Grouped by session newest first, chosen sort within the group |
+| Repeats | Counted after widget filters, shown as a badge, not sortable |
+| Refresh | Latest saved session only; disabled when it is outside the range |
+| Persistence | Not persisted, matching FR-15 |
+| Response shape | New shape with `sessions[]`; the v1 top-level session fields are removed rather than duplicated |
+| Schema | No change; existing composite primary key serves the range scans |
 
 ## 10. Open items
 - None blocking. See §6.4 for the IPO check.

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Draft for review |
-| **Last updated** | 2026-10-25 |
+| **Last updated** | 2026-10-30 |
 | **Requirements** | [`docs/requirements/unusual-volume-widget.md`](../requirements/unusual-volume-widget.md) |
 | **Tasks** | [`docs/design/unusual-volume-tasks.md`](unusual-volume-tasks.md) |
 | **Repo** | Fork **`kawabangaa/OpenTerminal`** (`origin`). `upstream` = `ErTasselli/openterminal` is fetch-only; never push or open PRs there. Full rules in the tasks doc, "Repository & git workflow". |
@@ -349,24 +349,16 @@ Query (all optional, validated with `zod` as `portfolio.ts` does; values below t
 | `sort` | one of row keys or `catalyst` | `rvol` | |
 | `dir` | `asc`\|`desc` | `desc` | |
 
-Response:
-```ts
-{
-  sessionDate: "2026-10-23", sessionLabel: "Fri 23 Oct 2026", earlyClose: false,
-  runAt: "2026-10-24T03:00:12Z", enrichmentStatus: "complete" | "pending",
-  spyChangePct: 0.6, totalMatches: 37,          // before the widget's own filters
-  flags: { opex: false, spRebalance: false, russell: false },
-  rows: UnusualVolumeRow[]                       // after filters, sorted
-}
-```
-- Request path: `SELECT` run + rows → JSON parse → filter → sort → respond. No provider call.
+The response shape is the multi-session contract in [`unusual-volume-range.md`](unusual-volume-range.md) §5.1 (`from`, `to`, `sessions[]`, `rows` with `sessionDate` and `repeats`). Query also accepts `to` and `span`. A span of 1 is the single-session view.
+
+- Request path: `SELECT` runs + rows for the range → JSON parse → filter → sort → respond. No provider call except the unchanged catch-up for D.
 - **No run for the current D:** if `inScanWindow(now)` the route awaits a catch-up `runUnusualVolume()` (shared in-flight promise) then serves it; otherwise it serves the latest saved run (its `sessionDate` tells the widget it is older). If nothing is saved at all → `503 { error: "First run has not happened yet. It runs daily at 06:00 or on the next startup outside US market hours." }`.
 - Catalyst sort key: `(strengthRank(strongest tag), tag id)`; rows with no catalysts last.
 - Errors → the same `fail()` shape as `market.ts` (502 + generic message), with the detail logged.
 
 ### `POST /api/unusual-volume/refresh`
 
-Re-runs phase 2 (enrichment) for the current run. `429 { retryAfterSec }` when the last refresh for this `sessionDate` is < 10 minutes old (FR-20). Responds `202 { enrichmentStatus: "pending" }` immediately; the widget polls `GET` until `complete`.
+Re-runs phase 2 (enrichment) for the current run. `429 { retryAfterSec }` when the last refresh for this `sessionDate` is < 10 minutes old (FR-20). Responds `202 { enrichmentStatus: "pending", sessionDate }` immediately; the widget polls `GET` until no session in the range is `pending`.
 
 ### AI Explain
 
@@ -446,6 +438,7 @@ the summary log line provides the counts for check 3.
 | 4 | `store.ts`, `db.ts` tables, `enrich.ts`, `run.ts`, `scheduler.ts`, route, `index.ts` wiring + tests | 1–3 |
 | 5 | Widget, store/workspace/sidebar wiring, CSS tiers | 4 |
 | 6 | README feature bullet + structure line, screenshot, requirements/design status → "Shipped" | 5 |
+| R1–R6 | Session range selector. See [`unusual-volume-range-tasks.md`](unusual-volume-range-tasks.md) | v1 |
 
 PRs 1–3 are independent and can be built in parallel. Commit subjects:
 `feat(unusual-volume): …`.

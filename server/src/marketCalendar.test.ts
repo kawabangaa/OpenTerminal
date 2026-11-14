@@ -8,6 +8,7 @@ import {
   isTradingDay,
   opexSession,
   resolveSignalSession,
+  tradingDaysEndingAt,
 } from "./marketCalendar.js";
 
 describe("resolveSignalSession", () => {
@@ -57,6 +58,30 @@ describe("resolveSignalSession", () => {
     expect(isTradingDay("2027-12-24")).toBe(false);
     expect(closeTimeHhmm("2027-12-24")).toBe("16:00");
     expect(EARLY_CLOSES[2027]).toEqual(["2027-11-26"]);
+  });
+});
+
+describe("tradingDaysEndingAt", () => {
+  it("skips Thanksgiving 2026 when counting back from Nov 30", () => {
+    expect(tradingDaysEndingAt("2026-11-30", 3)).toEqual(["2026-11-30", "2026-11-27", "2026-11-25"]);
+  });
+
+  it("steps across a weekend", () => {
+    expect(tradingDaysEndingAt("2026-10-26", 2)).toEqual(["2026-10-26", "2026-10-23"]);
+  });
+
+  it("returns the anchor alone for n = 1", () => {
+    expect(tradingDaysEndingAt("2026-10-23", 1)).toEqual(["2026-10-23"]);
+  });
+
+  it("rejects n outside 1…60", () => {
+    expect(() => tradingDaysEndingAt("2026-10-23", 0)).toThrow(RangeError);
+    expect(() => tradingDaysEndingAt("2026-10-23", 61)).toThrow(RangeError);
+  });
+
+  it("rejects a weekend or holiday anchor", () => {
+    expect(() => tradingDaysEndingAt("2026-10-31", 1)).toThrow(/not a trading day/);
+    expect(() => tradingDaysEndingAt("2026-11-26", 1)).toThrow(/not a trading day/);
   });
 });
 

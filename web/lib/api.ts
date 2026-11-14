@@ -63,6 +63,33 @@ export type Quote = {
 
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 
+export type SrLevel = {
+  price: number;
+  zone: [number, number];
+  type: "support" | "resistance";
+  rank: number;
+  label: string;
+  nPiv: number;
+  q: number;
+  episodes: number;
+  score: number;
+  extreme: boolean;
+  firstTouch: number;
+  lastTouch: number;
+};
+
+export type SrResult = {
+  symbol: string;
+  asOf: number;
+  windowStart: number;
+  lastClose: number;
+  eps: number;
+  step: number;
+  bars: number;
+  levels: SrLevel[];
+  reason: "insufficient_history" | null;
+};
+
 export function fmt(n: number | null | undefined, digits = 2): string {
   if (n === null || n === undefined || !isFinite(n)) return "—";
   return n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -124,6 +151,19 @@ export type Catalysts = {
   sources: Partial<Record<"edgar" | "news" | "earnings", "ok" | "fallback" | "failed" | "skipped">>;
 };
 
+export type SessionStatus = "complete" | "pending" | "missing";
+
+export type SessionMeta = {
+  sessionDate: string;
+  sessionLabel: string;
+  status: SessionStatus;
+  earlyClose: boolean;
+  runAt: string | null;
+  spyChangePct: number | null;
+  flags: { opex: boolean; spRebalance: boolean; russell: boolean };
+  matches: number;
+};
+
 export type UnusualVolumeRow = {
   symbol: string;
   name: string;
@@ -152,16 +192,16 @@ export type UnusualVolumeRow = {
   sectorMedianChangePct: number;
   sectorPeersOnList: number;
   catalysts: Catalysts | null;
+  sessionDate: string;
+  repeats: number;
 };
 
 export type UnusualVolumeResponse = {
-  sessionDate: string;
-  sessionLabel: string;
-  earlyClose: boolean;
-  runAt: string;
-  enrichmentStatus: "complete" | "pending";
-  spyChangePct: number | null;
+  from: string;
+  to: string;
+  currentSession: string;
+  latestSession: string | null;
+  sessions: SessionMeta[];
   totalMatches: number;
-  flags: { opex: boolean; spRebalance: boolean; russell: boolean };
   rows: UnusualVolumeRow[];
 };

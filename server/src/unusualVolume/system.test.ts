@@ -108,6 +108,8 @@ let db: (typeof import("../db.js"))["db"];
 let runUnusualVolume: (typeof import("./run.js"))["runUnusualVolume"];
 let getRun: (typeof import("./store.js"))["getRun"];
 let getRows: (typeof import("./store.js"))["getRows"];
+let saveListPhase: (typeof import("./store.js"))["saveListPhase"];
+let saveEnrichmentPhase: (typeof import("./store.js"))["saveEnrichmentPhase"];
 let unusualVolumeRouter: (typeof import("../routes/unusualVolume.js"))["unusualVolumeRouter"];
 let setUnusualVolumeNow: (typeof import("../routes/unusualVolume.js"))["setUnusualVolumeNow"];
 
@@ -116,7 +118,7 @@ beforeAll(async () => {
   process.env.DATA_DIR = tmpDir;
   ({ db } = await import("../db.js"));
   ({ runUnusualVolume } = await import("./run.js"));
-  ({ getRun, getRows } = await import("./store.js"));
+  ({ getRun, getRows, saveListPhase, saveEnrichmentPhase } = await import("./store.js"));
   ({ unusualVolumeRouter, setUnusualVolumeNow } = await import("../routes/unusualVolume.js"));
 });
 
@@ -178,12 +180,13 @@ describe("unusual-volume system", () => {
       const res = fakeRes();
       await getHandler()({ query: {}, path: "/" } as Request, res);
       const body = vi.mocked(res.json).mock.calls[0][0] as {
-        sessionDate: string;
-        enrichmentStatus: string;
+        to: string;
+        sessions: Array<{ sessionDate: string; status: string }>;
         rows: Array<{ symbol: string; rvol: number }>;
       };
-      expect(body.sessionDate).toBe(SESSION);
-      expect(body.enrichmentStatus).toBe("complete");
+      expect(body.to).toBe(SESSION);
+      expect(body.sessions[0]?.sessionDate).toBe(SESSION);
+      expect(body.sessions[0]?.status).toBe("complete");
       expect(body.rows.map((row) => row.symbol)).toEqual(["EARN", "MNA", "INSD", "LATE", "NONE", "QUIET"]);
       expect(body.rows.map((row) => row.rvol.toFixed(2))).toEqual(["5.00", "4.00", "3.50", "3.00", "2.70", "2.60"]);
 
@@ -208,6 +211,95 @@ describe("unusual-volume system", () => {
     } finally {
       log.mockRestore();
     }
+  });
+
+  it("serves a multi-session range with a gap through the route", async () => {
+    const anchor = new Date("2026-10-28T03:00:00.000Z");
+    const shared = "SHARE";
+    for (const sessionDate of ["2026-10-26", "2026-10-27"]) {
+      const summary = {
+        sessionDate,
+        earlyClose: false,
+        spyChangePct: 0.2,
+        counts: { universe: 1, liquid: 1, mcap: 1, rvol: 1, green: 1, seasoned: 1, matches: 1 },
+        requests: {},
+        failures: {},
+        durationMs: 1,
+      };
+      const saved = {
+        symbol: shared,
+        exchange: "NASDAQ",
+        name: "Shared Co",
+        sector: "Tech",
+        open: 10,
+        high: 11,
+        low: 9,
+        close: 10.5,
+        changePct: 1,
+        volume: 4_000_000,
+        avg30: 1_500_000,
+        marketCap: 5e9,
+        float: 5e7,
+        earningsLast: null,
+        earningsNext: null,
+        prevClose: 10,
+        adv30: ADV30,
+        rvol: sessionDate === "2026-10-27" ? 4 : 3,
+        candlePct: 5,
+        dayChangePct: 5,
+        gapPct: 0,
+        closeLocation: 0.7,
+        dollarVolume: 42_000_000,
+        turnover: 0.1,
+        sectorMedianChangePct: 0,
+        sectorPeersOnList: 1,
+        catalysts: null,
+      };
+      saveListPhase(
+        { sessionDate, runAt: `${sessionDate}T03:00:00.000Z`, earlyClose: false, spyChangePct: 0.2, universeSize: 1, summary },
+        [saved],
+      );
+      saveEnrichmentPhase(sessionDate, new Map(), summary, `${sessionDate}T03:01:00.000Z`);
+    }
+
+    setUnusualVolumeNow(() => anchor);
+    const res = fakeRes();
+    await getHandler()({ query: { to: "2026-10-27", span: "4" }, path: "/" } as Request, res);
+    const body = vi.mocked(res.json).mock.calls[0][0] as {
+      from: string;
+      sessions: Array<{ sessionDate: string; status: string }>;
+      rows: Array<{ symbol: string; sessionDate: string; repeats: number }>;
+    };
+    expect(body.from).toBe("2026-10-22");
+    expect(body.sessions.map((session) => `${session.sessionDate}:${session.status}`)).toEqual([
+      "2026-10-27:complete",
+      "2026-10-26:complete",
+      "2026-10-23:complete",
+      "2026-10-22:missing",
+    ]);
+    const share = body.rows.filter((row) => row.symbol === shared);
+    expect(share.map((row) => row.sessionDate)).toEqual(["2026-10-27", "2026-10-26"]);
+    expect(share.every((row) => row.repeats === 2)).toBe(true);
+    const dates = body.rows.map((row) => row.sessionDate);
+    expect(dates).toEqual([...dates].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0)));
+
+    const sessionsRes = fakeRes();
+    const sessionsHandler = (
+      unusualVolumeRouter as unknown as {
+        stack: Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: (req: Request, res: Response) => unknown }> } }>;
+      }
+    ).stack.find((entry) => entry.route?.path === "/sessions" && entry.route.methods.get);
+    if (!sessionsHandler?.route) throw new Error("no GET /sessions");
+    await sessionsHandler.route.stack[0].handle({ query: { limit: "4" }, path: "/sessions" } as Request, sessionsRes);
+    const listed = vi.mocked(sessionsRes.json).mock.calls[0][0] as {
+      sessions: Array<{ sessionDate: string; status: string }>;
+    };
+    expect(listed.sessions.map((session) => `${session.sessionDate}:${session.status}`)).toEqual([
+      "2026-10-27:complete",
+      "2026-10-26:complete",
+      "2026-10-23:complete",
+      "2026-10-22:missing",
+    ]);
   });
 });
 

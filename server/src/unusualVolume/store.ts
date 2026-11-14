@@ -33,6 +33,7 @@ type RunSql = {
 };
 
 type RowSql = {
+  session_date?: string;
   row_json: string;
   catalyst_json: string | null;
 };
@@ -45,6 +46,10 @@ const selectRun = db.prepare(
 
 const selectLatestRun = db.prepare(
   `SELECT ${RUN_COLUMNS} FROM unusual_volume_runs ORDER BY session_date DESC LIMIT 1`
+);
+
+const selectRunsBetween = db.prepare(
+  `SELECT ${RUN_COLUMNS} FROM unusual_volume_runs WHERE session_date BETWEEN ? AND ? ORDER BY session_date DESC`
 );
 
 const upsertRun = db.prepare(
@@ -85,6 +90,13 @@ const selectRows = db.prepare(
    FROM unusual_volume_rows
    WHERE session_date = ?
    ORDER BY rvol DESC`
+);
+
+const selectRowsBetween = db.prepare(
+  `SELECT session_date, row_json, catalyst_json
+   FROM unusual_volume_rows
+   WHERE session_date BETWEEN ? AND ?
+   ORDER BY session_date DESC, rvol DESC`
 );
 
 const selectSeasoned = db.prepare(
@@ -205,6 +217,22 @@ export function saveEnrichmentPhase(
 
 export function getRows(sessionDate: string): UnusualVolumeRow[] {
   return (selectRows.all(sessionDate) as RowSql[]).map(toUnusualVolumeRow);
+}
+
+export function listRuns(fromDate: string, toDate: string): StoredRun[] {
+  return (selectRunsBetween.all(fromDate, toDate) as RunSql[]).flatMap((row) => {
+    const mapped = mapRun(row);
+    return mapped ? [mapped] : [];
+  });
+}
+
+export type StoredRow = UnusualVolumeRow & { sessionDate: string };
+
+export function getRowsBetween(fromDate: string, toDate: string): StoredRow[] {
+  return (selectRowsBetween.all(fromDate, toDate) as Array<RowSql & { session_date: string }>).map((record) => ({
+    ...toUnusualVolumeRow(record),
+    sessionDate: record.session_date,
+  }));
 }
 
 export function isSeasoned(symbol: string): boolean {

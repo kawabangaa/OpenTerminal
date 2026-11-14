@@ -104,6 +104,19 @@ export type RunSummary = {
   durationMs: number;
 };
 
+export type SessionStatus = "complete" | "pending" | "missing";
+
+export type SessionMeta = {
+  sessionDate: string;
+  sessionLabel: string;
+  status: SessionStatus;
+  earlyClose: boolean;
+  runAt: string | null;
+  spyChangePct: number | null;
+  flags: { opex: boolean; spRebalance: boolean; russell: boolean };
+  matches: number;
+};
+
 export type RunOutcome =
   | { kind: "skipped"; reason: "market-hours" | "exists" }
   | { kind: "ran"; summary: RunSummary };

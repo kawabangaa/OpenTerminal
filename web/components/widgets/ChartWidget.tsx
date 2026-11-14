@@ -9,16 +9,44 @@ import {
   HistogramSeries,
   AreaSeries,
   BarSeries,
+  LineStyle,
   type IChartApi,
+  type IPriceLine,
+  type ISeriesApi,
+  type SeriesType,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { apiGet, fmt, fmtBig, type Candle } from "../../lib/api";
+import { apiGet, fmt, fmtBig, type Candle, type SrLevel, type SrResult } from "../../lib/api";
 import { sma, ema, vwap, rsi, macd, bollinger, type Point } from "../../lib/indicators";
 import { useWidgetSymbol, type WidgetInstance } from "../../store/terminal";
 
 const RANGES = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"] as const;
 const CHART_TYPES = ["candles", "bars", "line", "area"] as const;
-const INDICATORS = ["SMA20", "SMA50", "SMA200", "EMA20", "VWAP", "BOLL", "RSI", "MACD"] as const;
+const INDICATORS = ["SMA20", "SMA50", "SMA200", "EMA20", "VWAP", "BOLL", "RSI", "MACD", "SR"] as const;
+
+const SR_COLOR = { support: "#ff69b4", resistance: "#00e5ff" } as const;
+const SR_LINE_ALPHA = 0.45;
+
+function withAlpha(hex: string, a: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+/** One thin line at the level price. No zone edges, rank title, or axis price. */
+function drawSrLevels(series: ISeriesApi<SeriesType>, levels: SrLevel[]): IPriceLine[] {
+  const lines: IPriceLine[] = [];
+  for (const level of levels) {
+    lines.push(series.createPriceLine({
+      price: level.price,
+      color: withAlpha(SR_COLOR[level.type], SR_LINE_ALPHA),
+      lineWidth: 1,
+      lineStyle: LineStyle.Solid,
+      axisLabelVisible: false,
+      title: "",
+    }));
+  }
+  return lines;
+}
 
 type Range = (typeof RANGES)[number];
 type ChartType = (typeof CHART_TYPES)[number];
@@ -45,6 +73,14 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
     queryKey: ["history", symbol, range],
     queryFn: () => apiGet<Candle[]>(`/api/history/${encodeURIComponent(symbol)}?range=${range}`),
     refetchInterval: range === "1D" ? 8_000 : 60_000,
+  });
+
+  const srOn = active.has("SR");
+  const { data: sr, isError: srError } = useQuery({
+    queryKey: ["sr-levels", symbol],
+    queryFn: () => apiGet<SrResult>(`/api/sr-levels/${encodeURIComponent(symbol)}`),
+    enabled: srOn,
+    refetchInterval: 60_000,
   });
 
   // Fast time -> candle lookup for the crosshair legend, independent of chart type.
@@ -122,6 +158,25 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
     return rows;
   }, [legend, indicatorMaps]);
 
+  const srLegend = useMemo(() => {
+    if (!srOn) return null;
+    if (srError) return { kind: "message" as const, text: "S/R unavailable" };
+    if (sr?.reason === "insufficient_history") return { kind: "message" as const, text: "S/R: not enough history" };
+    if (!sr || sr.levels.length === 0) return null;
+    const close = legend?.close;
+    const entry = (level: SrLevel) => ({
+      label: level.label,
+      price: fmt(level.price),
+      bold: close !== undefined && close >= level.zone[0] && close <= level.zone[1],
+    });
+    return {
+      kind: "levels" as const,
+      resistance: sr.levels.filter((lv) => lv.type === "resistance").map(entry),
+      support: sr.levels.filter((lv) => lv.type === "support").map(entry),
+      eps: fmt(sr.eps),
+    };
+  }, [srOn, srError, sr, legend]);
+
   useEffect(() => {
     setLegend(candles && candles.length > 0 ? candles[candles.length - 1] : null);
   }, [candles]);
@@ -146,26 +201,25 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
     const upColor = "#00c853";
     const downColor = "#ff3d3d";
 
+    const ohlc = candles.map((c) => ({ time: ts(c.time), open: c.open, high: c.high, low: c.low, close: c.close }));
+    let main: ISeriesApi<SeriesType>;
     if (chartType === "candles") {
-      chart
-        .addSeries(CandlestickSeries, {
-          upColor, downColor, borderUpColor: upColor, borderDownColor: downColor,
-          wickUpColor: upColor, wickDownColor: downColor,
-        })
-        .setData(candles.map((c) => ({ time: ts(c.time), open: c.open, high: c.high, low: c.low, close: c.close })));
+      main = chart.addSeries(CandlestickSeries, {
+        upColor, downColor, borderUpColor: upColor, borderDownColor: downColor,
+        wickUpColor: upColor, wickDownColor: downColor,
+      });
+      main.setData(ohlc);
     } else if (chartType === "bars") {
-      chart
-        .addSeries(BarSeries, { upColor, downColor })
-        .setData(candles.map((c) => ({ time: ts(c.time), open: c.open, high: c.high, low: c.low, close: c.close })));
+      main = chart.addSeries(BarSeries, { upColor, downColor });
+      main.setData(ohlc);
     } else if (chartType === "line") {
-      chart
-        .addSeries(LineSeries, { color: "#ff9900", lineWidth: 1 })
-        .setData(candles.map((c) => ({ time: ts(c.time), value: c.close })));
+      main = chart.addSeries(LineSeries, { color: "#ff9900", lineWidth: 1 });
+      main.setData(candles.map((c) => ({ time: ts(c.time), value: c.close })));
     } else {
-      chart
-        .addSeries(AreaSeries, { lineColor: "#ff9900", topColor: "rgba(255,153,0,0.25)", bottomColor: "rgba(255,153,0,0)" })
-        .setData(candles.map((c) => ({ time: ts(c.time), value: c.close })));
+      main = chart.addSeries(AreaSeries, { lineColor: "#ff9900", topColor: "rgba(255,153,0,0.25)", bottomColor: "rgba(255,153,0,0)" });
+      main.setData(candles.map((c) => ({ time: ts(c.time), value: c.close })));
     }
+    if (srOn && sr?.levels) drawSrLevels(main, sr.levels);
 
     // volume histogram on its own scale at the bottom of the main pane
     const vol = chart.addSeries(HistogramSeries, { priceScaleId: "vol", priceFormat: { type: "volume" } });
@@ -222,7 +276,7 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
       chart.remove();
       chartRef.current = null;
     };
-  }, [candles, chartType, indicatorData, range, byTime]);
+  }, [candles, chartType, indicatorData, range, byTime, srOn ? sr : null]);
 
   const toggleIndicator = (ind: Indicator) =>
     setActive((prev) => {
@@ -249,7 +303,7 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
         <span className="w-2" />
         {INDICATORS.map((ind) => (
           <button key={ind} className={`term-btn ${active.has(ind) ? "active" : ""}`} onClick={() => toggleIndicator(ind)}>
-            {ind}
+            {ind === "SR" ? "S/R" : ind}
           </button>
         ))}
       </div>
@@ -271,6 +325,33 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
                     {r.label} <span style={{ color: r.color }}>{r.value}</span>
                   </span>
                 ))}
+              </div>
+            )}
+            {srLegend?.kind === "message" && <div className="dim">{srLegend.text}</div>}
+            {srLegend?.kind === "levels" && (
+              <div className="flex gap-3 flex-wrap">
+                <span className="dim">S/R</span>
+                {srLegend.resistance.length > 0 && (
+                  <span className="dim">
+                    R{" "}
+                    {srLegend.resistance.map((e) => (
+                      <span key={e.label} style={{ color: SR_COLOR.resistance }} className={e.bold ? "font-bold" : undefined}>
+                        {e.price}{" "}
+                      </span>
+                    ))}
+                  </span>
+                )}
+                {srLegend.support.length > 0 && (
+                  <span className="dim">
+                    S{" "}
+                    {srLegend.support.map((e) => (
+                      <span key={e.label} style={{ color: SR_COLOR.support }} className={e.bold ? "font-bold" : undefined}>
+                        {e.price}{" "}
+                      </span>
+                    ))}
+                  </span>
+                )}
+                <span className="dim">ε {srLegend.eps}</span>
               </div>
             )}
           </div>
