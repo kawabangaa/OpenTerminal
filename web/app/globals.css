@@ -68,6 +68,20 @@ body {
 .down {
   color: var(--down);
 }
+.rvol-2 {
+  color: var(--amber);
+}
+.rvol-3 {
+  color: color-mix(in srgb, var(--amber) 50%, var(--up));
+}
+.rvol-5 {
+  color: var(--up);
+}
+.uv-session {
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+  text-align: left;
+}
 .amber {
   color: var(--amber);
 }

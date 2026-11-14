@@ -18,17 +18,29 @@ async function edgarFetch(url: string): Promise<any> {
 }
 
 let tickerMap: Map<string, string> | null = null;
+let tickerMapLoading: Promise<void> | null = null;
 
 /** Ticker -> zero-padded 10-digit CIK, from SEC's full company list (cached in-process). */
 async function resolveCik(symbol: string): Promise<string | null> {
   if (!tickerMap) {
-    const data = await edgarFetch("https://www.sec.gov/files/company_tickers.json");
-    tickerMap = new Map();
-    for (const row of Object.values(data) as Array<{ ticker: string; cik_str: number }>) {
-      tickerMap.set(row.ticker.toUpperCase(), String(row.cik_str).padStart(10, "0"));
+    // The enrich fan-out asks for several symbols at once. Without a shared
+    // promise each of them would download the full ticker file before the map exists.
+    if (!tickerMapLoading) {
+      tickerMapLoading = edgarFetch("https://www.sec.gov/files/company_tickers.json")
+        .then((data) => {
+          const map = new Map<string, string>();
+          for (const row of Object.values(data) as Array<{ ticker: string; cik_str: number }>) {
+            map.set(row.ticker.toUpperCase(), String(row.cik_str).padStart(10, "0"));
+          }
+          tickerMap = map;
+        })
+        .finally(() => {
+          tickerMapLoading = null;
+        });
     }
+    await tickerMapLoading;
   }
-  return tickerMap.get(symbol.toUpperCase()) ?? null;
+  return tickerMap?.get(symbol.toUpperCase()) ?? null;
 }
 
 export type InsiderTransaction = {
@@ -47,19 +59,65 @@ export type InsiderTransaction = {
   sharesOwnedAfter: number | null;
 };
 
-type FilingRef = { accessionNumber: string; filingDate: string; primaryDocument: string };
+export type Filing = {
+  form: string;
+  acceptedAt: string; // ISO from filings.recent.acceptanceDateTime
+  items: string[]; // split on comma, trimmed; [] when the field is absent or empty
+  accessionNumber: string;
+  primaryDocument: string;
+  url: string; // https://www.sec.gov/Archives/edgar/data/{Number(cik)}/{accessionNoDashes}/{primaryDocument}
+};
 
-async function recentForm4Filings(cik: string, limit: number): Promise<FilingRef[]> {
-  const data = await edgarFetch(`https://data.sec.gov/submissions/CIK${cik}.json`);
+function filingUrl(cik: string, accessionNumber: string, primaryDocument: string): string {
+  const accessionNoDashes = accessionNumber.replace(/-/g, "");
+  return `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accessionNoDashes}/${primaryDocument}`;
+}
+
+function splitItems(raw: unknown): string[] {
+  if (typeof raw !== "string" || raw.trim() === "") return [];
+  return raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part !== "");
+}
+
+/** `items` is optional on older filings; a missing array is an empty list for every row. */
+function itemsAt(recent: { items?: unknown }, index: number): string[] {
+  const items = recent.items;
+  if (!Array.isArray(items)) return [];
+  return splitItems(items[index]);
+}
+
+async function fetchSubmissions(cik: string): Promise<any> {
+  return edgarFetch(`https://data.sec.gov/submissions/CIK${cik}.json`);
+}
+
+/**
+ * Filings whose acceptanceDateTime is at or after `sinceIso`, newest first.
+ * `null` when the ticker has no CIK — submissions is not requested in that case.
+ */
+export async function filingsSince(symbol: string, sinceIso: string): Promise<Filing[] | null> {
+  const cik = await resolveCik(symbol);
+  if (!cik) return null;
+  const data = await fetchSubmissions(cik);
   const recent = data?.filings?.recent;
-  if (!recent) return [];
-  const out: FilingRef[] = [];
-  for (let i = 0; i < recent.form.length && out.length < limit; i++) {
-    if (recent.form[i] !== "4") continue;
+  const accepted = recent?.acceptanceDateTime;
+  if (!Array.isArray(accepted)) return [];
+  const out: Filing[] = [];
+  // Newest-first. The first acceptance before the window ends the scan so later
+  // indexes (often absent, sometimes malformed) are never read.
+  for (let i = 0; i < accepted.length; i++) {
+    const acceptedAt = accepted[i];
+    if (typeof acceptedAt !== "string" || acceptedAt < sinceIso) break;
+    const accessionNumber: string = recent.accessionNumber[i];
+    const primaryDocument: string = recent.primaryDocument[i];
     out.push({
-      accessionNumber: recent.accessionNumber[i],
-      filingDate: recent.filingDate[i],
-      primaryDocument: recent.primaryDocument[i],
+      form: recent.form[i],
+      acceptedAt,
+      items: itemsAt(recent, i),
+      accessionNumber,
+      primaryDocument,
+      url: filingUrl(cik, accessionNumber, primaryDocument),
     });
   }
   return out;
@@ -70,10 +128,11 @@ function num(v: unknown): number | null {
   return isFinite(n) ? n : null;
 }
 
-async function parseForm4(cik: string, filing: FilingRef): Promise<InsiderTransaction[]> {
+export async function form4Transactions(cik: string, filing: Filing): Promise<InsiderTransaction[]> {
   const accessionNoDashes = filing.accessionNumber.replace(/-/g, "");
   // primaryDocument is the XSLT-rendered viewer path (e.g. "xslF345X06/form4.xml") —
   // the raw data XML sits at the accession folder root under its own filename.
+  // Filing.url keeps the full primaryDocument; this fetch does not.
   const filename = filing.primaryDocument.split("/").pop();
   const url = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accessionNoDashes}/${filename}`;
   const res = await fetch(url, { headers: { "User-Agent": UA } });
@@ -82,6 +141,7 @@ async function parseForm4(cik: string, filing: FilingRef): Promise<InsiderTransa
   const doc = parser.parse(xml)?.ownershipDocument;
   if (!doc) return [];
 
+  const filingDate = filing.acceptedAt.slice(0, 10);
   const owner = doc.reportingOwner;
   const ownerName: string = owner?.reportingOwnerId?.rptOwnerName ?? "Unknown";
   const rel = owner?.reportingOwnerRelationship ?? {};
@@ -100,8 +160,8 @@ async function parseForm4(cik: string, filing: FilingRef): Promise<InsiderTransa
     const shares = num(r.transactionAmounts?.transactionShares?.value);
     const price = num(r.transactionAmounts?.transactionPricePerShare?.value);
     return {
-      filingDate: filing.filingDate,
-      transactionDate: r.transactionDate?.value ?? filing.filingDate,
+      filingDate,
+      transactionDate: r.transactionDate?.value ?? filingDate,
       ownerName,
       ownerTitle,
       isDirector,
@@ -126,7 +186,30 @@ const SEC_FETCH_CONCURRENCY = 5;
 export async function insiderTransactions(symbol: string, filingLimit = 20): Promise<InsiderTransaction[]> {
   const cik = await resolveCik(symbol);
   if (!cik) return [];
-  const filings = await recentForm4Filings(cik, filingLimit);
-  const parsed = await mapWithConcurrency(filings, SEC_FETCH_CONCURRENCY, (f) => parseForm4(cik, f).catch(() => []));
+  // filingsSince is windowed and would drop older Form 4s. This stays the newest
+  // `filingLimit` submissions whose form is "4", then the same open-market parse.
+  const data = await fetchSubmissions(cik);
+  const recent = data?.filings?.recent;
+  const forms: unknown[] = Array.isArray(recent?.form) ? recent.form : [];
+  const filings: Filing[] = [];
+  for (let i = 0; i < forms.length && filings.length < filingLimit; i++) {
+    if (forms[i] !== "4") continue;
+    const filingDate: string = recent.filingDate[i];
+    const accessionNumber: string = recent.accessionNumber[i];
+    const primaryDocument: string = recent.primaryDocument[i];
+    filings.push({
+      form: "4",
+      // form4Transactions takes filingDate from acceptedAt's calendar day.
+      // submissions filingDate is already YYYY-MM-DD, so the previous field is unchanged.
+      acceptedAt: filingDate,
+      items: itemsAt(recent, i),
+      accessionNumber,
+      primaryDocument,
+      url: filingUrl(cik, accessionNumber, primaryDocument),
+    });
+  }
+  const parsed = await mapWithConcurrency(filings, SEC_FETCH_CONCURRENCY, (f) =>
+    form4Transactions(cik, f).catch(() => []),
+  );
   return parsed.flat().sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
 }

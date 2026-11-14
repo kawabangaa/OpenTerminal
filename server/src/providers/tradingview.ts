@@ -2,6 +2,9 @@
 // own screener widget and symbol search box. No API key. Requires a
 // believable Referer/Origin or the edge returns 403.
 
+import { tracked } from "./registry.js";
+import type { ScanRow } from "../unusualVolume/types.js";
+
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const HEADERS = {
   "User-Agent": UA,
@@ -123,6 +126,114 @@ export async function marketScan(limit = 1500): Promise<MarketRow[]> {
     // markets — noisy, illiquid duplicates of companies better represented
     // elsewhere; drop them so the heatmap/screener only shows primary US listings.
     .filter((r) => r.symbol && r.exchange !== "OTC");
+}
+
+const UNUSUAL_VOLUME_COLUMNS = [
+  "name",
+  "description",
+  "exchange",
+  "sector",
+  "open",
+  "high",
+  "low",
+  "close",
+  "change",
+  "volume",
+  "average_volume_30d_calc",
+  "market_cap_basic",
+  "float_shares_outstanding",
+  "earnings_release_date",
+  "earnings_release_next_date",
+];
+
+type ScannerCell = string | number | null;
+type ScannerHit = { s?: string; d?: ScannerCell[] };
+
+function nullableNumber(v: ScannerCell | undefined): number | null {
+  if (v == null) return null;
+  return Number(v);
+}
+
+/**
+ * US common-stock universe for the unusual-volume pipeline.
+ * `dropped` counts rows missing open/high/low/close/change/volume/avg30.
+ * A full page (`data.length === range`) is truncated — throw before mapping.
+ */
+export async function unusualVolumeScan(range = 5000): Promise<{ rows: ScanRow[]; dropped: number }> {
+  return tracked("tradingview", async () => {
+    const res = await fetch("https://scanner.tradingview.com/america/scan", {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({
+        columns: UNUSUAL_VOLUME_COLUMNS,
+        filter: [
+          { left: "type", operation: "equal", right: "stock" },
+          { left: "typespecs", operation: "has", right: ["common"] },
+          { left: "exchange", operation: "in_range", right: ["NASDAQ", "NYSE", "AMEX"] },
+          { left: "average_volume_30d_calc", operation: "greater", right: 900000 },
+          { left: "close", operation: "greater", right: 1 },
+        ],
+        sort: { sortBy: "average_volume_30d_calc", sortOrder: "desc" },
+        range: [0, range],
+      }),
+    });
+    if (!res.ok) throw new Error(`tradingview scan ${res.status}`);
+    const json = await res.json();
+    const data: ScannerHit[] = json?.data ?? [];
+    if (data.length === range) throw new Error("tradingview scan: universe truncated");
+
+    const rows: ScanRow[] = [];
+    let dropped = 0;
+    for (const row of data) {
+      const d = row.d ?? [];
+      // Index 0 is TradingView's ticker (`name`). ScanRow.name is the company (`description`).
+      const [, description, exchange, sector, open, high, low, close, change, volume, avg30, marketCap, floatShares, earningsLast, earningsNext] = d;
+      if (open == null || high == null || low == null || close == null || change == null || volume == null || avg30 == null) {
+        dropped++;
+        continue;
+      }
+      const symbol = (row.s ?? "").split(":")[1];
+      if (!symbol) continue;
+      rows.push({
+        symbol,
+        exchange: typeof exchange === "string" ? exchange : "",
+        name: typeof description === "string" && description ? description : symbol,
+        sector: typeof sector === "string" && sector ? sector : "Other",
+        open: Number(open),
+        high: Number(high),
+        low: Number(low),
+        close: Number(close),
+        changePct: Number(change),
+        volume: Number(volume),
+        avg30: Number(avg30),
+        marketCap: nullableNumber(marketCap),
+        float: nullableNumber(floatShares),
+        earningsLast: nullableNumber(earningsLast),
+        earningsNext: nullableNumber(earningsNext),
+      });
+    }
+    return { rows, dropped };
+  });
+}
+
+/** Today's SPY percent change, or null when the scanner has no value. */
+export async function spyChange(): Promise<number | null> {
+  return tracked("tradingview", async () => {
+    const res = await fetch("https://scanner.tradingview.com/america/scan", {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({
+        symbols: { tickers: ["AMEX:SPY"] },
+        columns: ["change"],
+      }),
+    });
+    if (!res.ok) throw new Error(`tradingview scan ${res.status}`);
+    const json = await res.json();
+    const data: ScannerHit[] = json?.data ?? [];
+    if (data.length === 0) return null;
+    const change = data[0]?.d?.[0];
+    return typeof change === "number" ? change : null;
+  });
 }
 
 // Major European markets, one TradingView scanner region per country — there

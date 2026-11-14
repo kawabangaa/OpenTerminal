@@ -15,7 +15,13 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.error ?? `HTTP ${res.status}`);
+    const err = new Error(data.error ?? `HTTP ${res.status}`) as Error & {
+      status: number;
+      body: unknown;
+    };
+    err.status = res.status;
+    err.body = data;
+    throw err;
   }
   return res.json();
 }
@@ -57,6 +63,33 @@ export type Quote = {
 
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 
+export type SrLevel = {
+  price: number;
+  zone: [number, number];
+  type: "support" | "resistance";
+  rank: number;
+  label: string;
+  nPiv: number;
+  q: number;
+  episodes: number;
+  score: number;
+  extreme: boolean;
+  firstTouch: number;
+  lastTouch: number;
+};
+
+export type SrResult = {
+  symbol: string;
+  asOf: number;
+  windowStart: number;
+  lastClose: number;
+  eps: number;
+  step: number;
+  bars: number;
+  levels: SrLevel[];
+  reason: "insufficient_history" | null;
+};
+
 export function fmt(n: number | null | undefined, digits = 2): string {
   if (n === null || n === undefined || !isFinite(n)) return "—";
   return n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -76,3 +109,99 @@ export function pctClass(n: number | null | undefined): string {
   if (n === null || n === undefined) return "dim";
   return n >= 0 ? "up" : "down";
 }
+
+export type TagId =
+  | "EARN"
+  | "M&A"
+  | "ACTIVIST"
+  | "INSIDER_BUY"
+  | "FDA"
+  | "ANALYST"
+  | "GUIDANCE"
+  | "CONTRACT"
+  | "INDEX"
+  | "8K"
+  | "NEWS"
+  | "SECTOR"
+  | "OPEX"
+  | "REBAL"
+  | "RUSSELL";
+
+export type Strength = "strong" | "medium" | "weak" | "context";
+
+export type Evidence = {
+  kind: "headline" | "filing" | "earnings" | "insider";
+  time: string;
+  afterClose: boolean;
+  title: string;
+  url: string | null;
+  publisher?: string;
+  form?: string;
+  items?: string[];
+  detail?: string;
+  tags: TagId[];
+};
+
+export type Tag = { id: TagId; strength: Strength; afterClose?: boolean; detail?: string };
+
+export type Catalysts = {
+  tags: Tag[];
+  evidence: Evidence[];
+  explain: string[];
+  sources: Partial<Record<"edgar" | "news" | "earnings", "ok" | "fallback" | "failed" | "skipped">>;
+};
+
+export type SessionStatus = "complete" | "pending" | "missing";
+
+export type SessionMeta = {
+  sessionDate: string;
+  sessionLabel: string;
+  status: SessionStatus;
+  earlyClose: boolean;
+  runAt: string | null;
+  spyChangePct: number | null;
+  flags: { opex: boolean; spRebalance: boolean; russell: boolean };
+  matches: number;
+};
+
+export type UnusualVolumeRow = {
+  symbol: string;
+  name: string;
+  exchange: string;
+  sector: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  changePct: number;
+  volume: number;
+  avg30: number;
+  marketCap: number | null;
+  float: number | null;
+  earningsLast: number | null;
+  earningsNext: number | null;
+  prevClose: number;
+  adv30: number;
+  rvol: number;
+  candlePct: number;
+  dayChangePct: number;
+  gapPct: number;
+  closeLocation: number | null;
+  dollarVolume: number;
+  turnover: number | null;
+  sectorMedianChangePct: number;
+  sectorPeersOnList: number;
+  catalysts: Catalysts | null;
+  sessionDate: string;
+  repeats: number;
+};
+
+export type UnusualVolumeResponse = {
+  from: string;
+  to: string;
+  currentSession: string;
+  latestSession: string | null;
+  sessions: SessionMeta[];
+  totalMatches: number;
+  rows: UnusualVolumeRow[];
+};

@@ -37,10 +37,11 @@ No signup. No credit card. No rate‑limited demo tier. Clone it, `npm install`,
 
 - 🖥️ **Widget-based workspace** — drag, resize, add, and remove panels (`react-grid-layout`); your layout is saved locally and restored on reload
 - ⌘K **global command palette** — instantly search stocks, ETFs, and crypto and jump straight to them
-- 📈 **Professional charting** (via [`lightweight-charts`](https://github.com/tradingview/lightweight-charts)) — candlesticks, bars, line, area, volume, 8 timeframes (1D → MAX), and SMA / EMA / VWAP / Bollinger Bands / RSI / MACD indicators, each with a live hover legend showing OHLC, volume, and every active indicator's value under your cursor
+- 📈 **Professional charting** (via [`lightweight-charts`](https://github.com/tradingview/lightweight-charts)) — candlesticks, bars, line, area, volume, 8 timeframes (1D → MAX), SMA / EMA / VWAP / Bollinger Bands / RSI / MACD, and support/resistance bands (pink support, cyan resistance), each with a live hover legend showing OHLC, volume, and every active indicator's value under your cursor
 - 💹 **Quote panel** — last / bid / ask / OHLC, volume, market cap, P/E, EPS, dividend yield, 52‑week range, beta, shares outstanding
 - 📰 **News feed** — aggregated and de‑duplicated from multiple RSS sources, per‑symbol or global
 - 🔎 **Full‑market screener** — filter by sector, market cap, % change, and volume across the entire US equity market, sortable on every column
+- 📊 **Unusual volume** — stocks whose session volume is far above their own 30-day average, with a catalyst when one is on the record; browse any of the last 90 sessions, or several at once. A session is lost if the server is not running between 20:00 and 04:00 ET (03:00–11:00 Israel time); keep it up through the 06:00 run.
 - 🗺️ **Live sector heatmap** — treemap sized by market cap, colored by daily % change, refreshing every few seconds
 - ⛓️ **Options chain** — calls and puts side‑by‑side with strike, bid/ask, volume, open interest, and ITM highlighting
 - 🪙 **Crypto board** — top assets with 7‑day sparklines, BTC/ETH dominance, and full OHLCV charting for any listed coin

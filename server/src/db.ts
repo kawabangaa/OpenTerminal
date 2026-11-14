@@ -29,6 +29,32 @@ CREATE TABLE IF NOT EXISTS transactions (
   price REAL NOT NULL CHECK (price >= 0),
   executed_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS unusual_volume_runs (
+  session_date   TEXT PRIMARY KEY,
+  run_at         TEXT NOT NULL,
+  enriched_at    TEXT,
+  status         TEXT NOT NULL CHECK (status IN ('list','complete')),
+  early_close    INTEGER NOT NULL DEFAULT 0,
+  spy_change_pct REAL,
+  universe_size  INTEGER NOT NULL,
+  summary_json   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS unusual_volume_rows (
+  session_date   TEXT NOT NULL REFERENCES unusual_volume_runs(session_date) ON DELETE CASCADE,
+  symbol         TEXT NOT NULL,
+  rvol           REAL NOT NULL,
+  row_json       TEXT NOT NULL,
+  catalyst_json  TEXT,
+  PRIMARY KEY (session_date, symbol)
+);
+CREATE TABLE IF NOT EXISTS unusual_volume_seasoned (
+  symbol         TEXT PRIMARY KEY,
+  checked_at     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS unusual_volume_refresh (
+  session_date   TEXT PRIMARY KEY,
+  last_refresh   TEXT NOT NULL
+);
 `);
 
 const defaultPortfolio = db.prepare("SELECT id FROM portfolios LIMIT 1").get();
